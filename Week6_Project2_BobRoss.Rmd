@@ -1,0 +1,132 @@
+---
+title: "Data 607 - Week 6 - Project 2"
+subtitle: "Bob Ross Paintings"
+author: "Glen Dale Davis"
+date: "2023-02-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Packages:
+
+Below, the packages required for data analysis and visualization are loaded.
+
+```{r packages, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(magrittr)
+library(DT)
+library(gganimate)
+library(gifski)
+
+```
+
+## Bob Ross Paintings Data Collection:
+
+We load data for all the paintings Bob Ross worked on during the TV show The Joy of Painting, which ran for 31 seasons. Each row of the data represents a painting, and there are boolean columns for all the colors he used throughout the show, indicating whether each color was used in each painting. We remove some columns not needed for analysis.
+
+```{r bob_ross_paintings1}
+my_url1 <- "https://raw.githubusercontent.com/geedoubledee/data607_project2/main/bob_ross_paintings.csv"
+bob_ross_paintings <- read.csv(my_url1)
+bob_ross_paintings_new <- subset(bob_ross_paintings,
+                    select = -c(X, img_src, youtube_src))
+
+datatable(head(bob_ross_paintings_new[, -c(6, 7)]), rownames = FALSE, options = list(scrollX = TRUE))
+
+```
+
+## Bob Ross Paintings Data Clean Up:
+
+We group the data by season and sum the number of paintings each color was used in per season. Each season is now a row, and the color sums are columns with values for each season. The data is still in a wide format.
+
+```{r bob_ross_paintings2}
+bob_ross_paintings_new_analysis <- bob_ross_paintings_new
+bob_ross_paintings_new_analysis %<>%
+    group_by(season) %>%
+    summarize(Sum_Black_Gesso = sum(Black_Gesso),
+              Sum_Bright_Red = sum(Bright_Red),
+              Sum_Burnt_Umber = sum(Burnt_Umber),
+              Sum_Cadmium_Yellow = sum(Cadmium_Yellow),
+              Sum_Dark_Sienna = sum(Dark_Sienna),
+              Sum_Indian_Red = sum(Indian_Red),
+              Sum_Indian_Yellow = sum(Indian_Yellow),
+              Sum_Liquid_Black = sum(Liquid_Black),
+              Sum_Liquid_Clear = sum(Liquid_Clear),
+              Sum_Midnight_Black = sum(Midnight_Black),
+              Sum_Phthalo_Blue = sum(Phthalo_Blue),
+              Sum_Phthalo_Green = sum(Phthalo_Green),
+              Sum_Prussian_Blue = sum(Prussian_Blue),
+              Sum_Sap_Green = sum(Sap_Green),
+              Sum_Titanium_White = sum(Titanium_White),
+              Sum_Van_Dyke_Brown = sum(Van_Dyke_Brown),
+              Sum_Yellow_Ochre = sum(Yellow_Ochre),
+              Sum_Alizarin_Crimson = sum(Alizarin_Crimson))
+
+colnames(bob_ross_paintings_new_analysis)[1] = "Season"
+
+datatable(head(bob_ross_paintings_new_analysis), rownames = FALSE, options = list(scrollX = TRUE))
+
+```
+
+We then pivot the data into a long format, in which the color names become variables of Color and their sums per season become the Sum values. 
+
+```{r bob_ross_paintings3}
+bob_ross_paintings_new_analysis %<>%
+    pivot_longer(cols = starts_with("Sum_"),
+                 names_to = "Color",
+                 values_to = "Sum") %>%
+    arrange(Season, desc(Sum))
+
+bob_ross_paintings_new_analysis$Color <- str_replace_all(
+    bob_ross_paintings_new_analysis$Color, "^Sum_", "")
+
+datatable(head(bob_ross_paintings_new_analysis), rownames = FALSE)
+
+```
+
+## Bob Ross Paintings Data Analysis:
+
+Since the original data includes the hex codes for the colors we're analyzing, we retrieve those unique values from the data frame so we can use them. A little string replacement has to happen first, followed by some string splitting. A few colors are variations of black and white, so they use the same hex codes, and we account for that. We name the values in the hex codes vector we've created by Color name so that the bar chart we create later will be able to match the hex codes to the colors in our data properly.
+
+```{r bob_ross_paintings4}
+bob_ross_paintings_new$color_hex <- str_replace_all(
+    bob_ross_paintings_new$color_hex, "\\[", "")
+bob_ross_paintings_new$color_hex <- str_replace_all(
+    bob_ross_paintings_new$color_hex, "\\]", "")
+bob_ross_paintings_new$color_hex <- str_replace_all(
+    bob_ross_paintings_new$color_hex, "'", "")
+
+bob_ross_colors <- unique(unlist(as.list(strsplit(bob_ross_paintings_new$color_hex, ", "))))
+
+bob_ross_colors <- append(bob_ross_colors, c("#FFFFFF", "#000000", "#000000"))
+
+names(bob_ross_colors) <- c("Alizarin_Crimson", "Bright_Red",
+                            "Cadmium_Yellow", "Phthalo_Green",
+                            "Prussian_Blue", "Sap_Green", "Titanium_White",
+                            "Van_Dyke_Brown", "Midnight_Black",
+                            "Burnt_Umber", "Indian_Yellow", "Phthalo_Blue",
+                            "Yellow_Ochre", "Dark_Sienna", "Indian_Red",
+                            "Liquid_Clear", "Liquid_Black", "Black_Gesso")
+
+```
+We create a bar chart of the number of paintings in which each color was used. We animate it based on Season and set both the number of frames and the fps to the total number of seasons so that we're only looking at one season per frame, and we're only looking at one frame per second.
+
+```{r bob_ross_paintings5}
+p <- ggplot(bob_ross_paintings_new_analysis, aes(x = reorder(Color, Sum),
+                                                 y = Sum,
+                                                 fill = Color)) + 
+    geom_bar(stat = "identity", show.legend = FALSE) +
+    labs(title = "Season: {closest_state}") +
+    coord_flip() + 
+    scale_fill_manual(values = bob_ross_colors) + 
+    xlab("Color") +
+    ylab("Number of Paintings In Which Color Was Used")
+a <- p +
+    transition_states(Season, wrap = FALSE)
+animate(a, nframes = 31, fps = 1)
+
+```
+
+One notable insight is that Indian Red is only used in one Season (22), and in fact it is only ever used in one painting: Autumn Images. Several of the colors used in later seasons are also missing from Season 1, when the show was produced by a different TV station and perhaps had a smaller palette budget. My last very basic observation is that Midnight Black doesn't appear until Season 3, and Bob Ross uses it pretty infrequently until Season 7, at which point it becomes a staple of his palette.

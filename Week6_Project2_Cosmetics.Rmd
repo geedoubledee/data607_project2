@@ -1,0 +1,81 @@
+---
+title: "Data 607 - Week 6 - Project 2"
+subtitle: "Cosmetics Ingredients"
+author: "Glen Dale Davis"
+date: "2023-02-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Packages:
+
+Below, the packages required for data analysis and visualization are loaded.
+
+```{r packages, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(magrittr)
+library(DT)
+
+```
+
+## Cosmetics Ingredients Data Collection:
+
+We load data related to cosmetics Products from a number of Brands and those Products' Ingredients. We remove a number of columns not needed for analysis.
+
+```{r cosmetics1}
+my_url1 <- "https://raw.githubusercontent.com/geedoubledee/data607_project2/main/cosmetics.csv"
+cosmetics <- read.csv(my_url1)
+cosmetics_new <- subset(cosmetics,
+                    select = -c(Rank, Combination, Dry, Normal,
+                                Oily, Sensitive))
+
+datatable(head(cosmetics_new), options = list(pageLength = 3))
+
+```
+
+## Cosmetics Ingredients Data Clean Up:
+
+Most of the Ingredients data for each Product is stored as a character string, delimited by a comma, so we separate those strings into their individual components and widen this one column into multiple columns. We name the new columns starting with "Ingredients_", followed by that Ingredient's integer position in the original comma-delimited string we separated (1, 2, etc.). We fill in NAs as needed if a Product's number of Ingredients doesn't match the number of "Ingredients_" columns we've created, as all Products don't have the same number of Ingredients.
+
+```{r cosmetics2}
+cosmetics_new %<>%
+    separate_wider_delim(Ingredients, delim = ", ", names_sep = "_",
+                         too_few = "align_start")
+
+datatable(head(cosmetics_new), options = list(scrollX = TRUE))
+
+```
+
+Then we pivot this wide data into a longer format where an Ingredient's integer position in the original comma-delimited string becomes a variable called Listed_Order, and the matching Ingredient goes in the Ingredient column.
+
+```{r cosmetics3}
+cosmetics_new %<>%
+    pivot_longer(cols = starts_with("Ingredients_"),
+                 names_to = "Listed_Order",
+                 values_to = "Ingredient") %>%
+    filter(!is.na(Ingredient))
+
+cosmetics_new$Listed_Order <- as.integer(
+    str_replace_all(cosmetics_new$Listed_Order, "Ingredients_", ""))
+
+datatable(head(cosmetics_new))
+
+```
+
+## Cosmetics Ingredients Data Analysis:
+
+We now count the number of Products each Ingredient is used in, and we sort the results in descending order. We display the top 25 most used Ingredients across all Brands.
+
+```{r cosmetics4}
+cosmetics_new_analysis <- cosmetics_new
+cosmetics_new_analysis %<>%
+    group_by(Ingredient) %>%
+    summarize(Products = n()) %>%
+    arrange(desc(Products))
+
+datatable(head(cosmetics_new_analysis, 25))
+
+```

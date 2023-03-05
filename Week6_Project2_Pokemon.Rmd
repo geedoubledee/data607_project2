@@ -1,0 +1,286 @@
+---
+title: "Data 607 - Week 6 - Project 2"
+subtitle: "Pokémon"
+author: "Glen Dale Davis"
+date: "2023-02-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Packages:
+
+Below, the packages required for data analysis and visualization are loaded.
+
+```{r packages, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(magrittr)
+library(zoo)
+library(DT)
+
+```
+
+## Pokémon Data Collection:
+
+[Serebii.net](https://www.serebii.net/Pokémon/nationalpokedex.shtml) keeps a list of all the Pokémon in the various games in the franchise. The data on this site is in a wide format where each Pokémon gets its own unique row in the table. Here’s a snapshot:
+
+![](https://raw.githubusercontent.com/geedoubledee/data607_project2/main/serebii_pokedex.png)
+
+Below, we load the HTML data from the site and extract the table of interest into a data frame. Then we export that data frame to .csv and reload it. 
+
+```{r pokemon1, warning = FALSE, message = FALSE}
+my_url1 <- "https://www.serebii.net/pokemon/nationalpokedex.shtml"
+dat <- try(xml2::read_html(my_url1))
+if (inherits(dat, "try-error", which = FALSE)){
+    break
+}else{
+    pokemon <- xml2::xml_find_all(dat,
+                                  "//table[contains(@class, 'dextable')]")
+    pokemon <- rvest::html_table(pokemon)[[1]]
+}
+write.csv(pokemon, "pokemon.csv", row.names = FALSE)
+my_url2 <- "https://raw.githubusercontent.com/geedoubledee/data607_project2/main/pokemon.csv"
+pokemon_new <- read.csv(my_url2)
+
+as_tibble(pokemon_new)
+
+```
+
+## Pokémon Data Clean Up:
+
+Because of how merged cells are handled by the function used to extract the table data, some of the info we're interested in doesn't come through correctly. We will reprocess some of the data from the site differently later to fix that. First, we clean up the data we do have by removing several columns and rows and shifting things around a bit. We also rename the columns we intend to keep. 
+
+```{r pokemon2, warning = FALSE, message = FALSE}
+pokemon_new <- pokemon_new[-1, ]
+pokemon_new <- pokemon_new[, -2]
+pokemon_new <- pokemon_new[, -2]
+pokemon_new <- pokemon_new[, -3]
+cols <- c("Number", "Name", "Abilities", "Base_Hit_Points", "Base_Attack", "Base_Defense", "Base_Special_Attack", "Base_Special_Defense", "Base_Speed")
+colnames(pokemon_new) <- cols
+pokemon_new <- pokemon_new[-1, ]
+pokemon_new %<>%
+    filter(!is.na(Name))
+pokemon_new <- pokemon_new[, -3]
+
+datatable(pokemon_new[1:10, ], rownames = FALSE,
+          options = list(scrollX = TRUE))
+
+```
+
+Pokémon Type is the first column of data we're interested in that did not come through correctly, and Abilities is the second. These pieces of data are both stored as links, so we can retrieve them from the HTML data separately and store them in another data frame. The Pokémon Names are stored as links that precede the Types and Abilities for that Pokémon as well. Later, we'll combine the two data frames based on the Names. 
+
+```{r pokemon3, warning = FALSE, message = FALSE}
+links <- xml2::xml_find_all(dat, "//td[@class='fooinfo']/a")
+attrs <- t(as.data.frame(xml2::xml_attrs(links)))
+rownames(attrs) <- NULL
+attrs <- cbind(attrs, as.data.frame(matrix(nrow = nrow(attrs), ncol = 2)))
+cols <- c("Name", "Types", "Abilities")
+colnames(attrs) <- cols
+
+as_tibble(attrs)
+
+```
+
+So we loop through the link text we've retrieved and move the type-related link text to the Types column and the ability-related link text to the Abilities column. We leave the name-related link text in the Names column. We put NA in the cells we removed link text from so that we can easily clean up cells without data later.
+
+```{r pokemon4, warning = FALSE, message = FALSE}
+
+for (i in 1:nrow(attrs)){
+    if (any(str_detect(attrs[i, 1], "/type/"))){
+        attrs[i, 2] <- attrs[i, 1]
+        attrs[i, 1] <- NA
+    }else if (any(str_detect(attrs[i, 1], "/abilitydex/"))){
+        attrs[i, 3] <- attrs[i, 1]
+        attrs[i, 1] <- NA
+    }
+}
+
+as_tibble(attrs)
+
+```
+
+We remove unnecessary link text from the Name, Types, and Abilities columns so only the character values we're interested in are left. 
+
+```{r pokemon5, warning = FALSE, message = FALSE}
+
+attrs$Name <- str_replace_all(attrs$Name, "/pokemon/", "")
+attrs$Types <- str_replace_all(attrs$Types, "/pokemon/type/", "")
+attrs$Abilities <- str_replace_all(attrs$Abilities, "/abilitydex/", "")
+attrs$Abilities <- str_replace_all(attrs$Abilities, "\\.shtml", "")
+
+```
+
+Each Pokémon can have multiple Types and Abilities, and each Pokémon's Name precedes its Types and Abilities. So we want to carry the last Name observation forward for every NA value in the Names column. 
+
+```{r pokemon6, warning = FALSE, message = FALSE}
+attrs$Name <- na.locf(attrs$Name)
+
+as_tibble(attrs)
+
+```
+
+Rows with NA in both the Types and Abilities column are unnecessary, so we sum the NA values per row and filter rows with 2 NAs out.
+
+```{r pokemon7, warning = FALSE, message = FALSE}
+rS <- rowSums(is.na(attrs))
+attrs <- cbind(attrs, rS)
+attrs %<>%
+    filter(rS < 2)
+attrs <- attrs[, -4]
+
+```
+
+Now we pivot the Types and Abilities data into a longer format where Type and Ability are considered variables of Attribute and filter out rows with any NAs.
+
+```{r pokemon8, warning = FALSE, message = FALSE}
+attrs %<>%
+    pivot_longer(cols = !starts_with("N"),
+                 names_to = "Attribute",
+                 values_to = "Value")
+attrs$Attribute <- str_replace_all(attrs$Attribute, "Types", "Type")
+attrs$Attribute <- str_replace_all(attrs$Attribute, "Abilities", "Ability")
+rS <- rowSums(is.na(attrs))
+attrs <- cbind(attrs, rS)
+attrs %<>%
+    filter(rS < 1)
+attrs <- attrs[, -4]
+
+```
+
+We want the Names in the attrs data frame to match the Names in the pokemon_new data frame. So we replace the values in the former with the values from the latter. Most of these involve simple case changes; we handle a few that are more complicated separately. 
+
+```{r pokemon9, warning = FALSE, message = FALSE}
+replacements <- c()
+
+for (i in 1:nrow(pokemon_new)){
+    proper <- as.character(pokemon_new[i, 2])
+    improper <- tolower(proper)
+    if ((improper) %in% attrs$Name){
+        attrs$Name <- str_replace_all(attrs$Name,
+                                      paste("^", improper, "$", sep = ""),
+                                      proper)
+    }else{
+        replacements <- append(replacements, proper)
+        next
+    }
+}
+
+not_replaced <- c("nidoranf", "nidoranm", "mr.mime", "mimejr.", "flabebe",
+                  "type:null", "tapukoko", "tapulele", "tapubulu",
+                  "tapufini", "mr.rime", "greattusk", "screamtail",
+                  "brutebonnet", "fluttermane", "slitherwing", "sandyshocks",
+                  "irontreads", "ironbundle", "ironhands", "ironjugulis",
+                  "ironmoth", "ironthorns", "roaringmoon", "ironvaliant",
+                  "walkingwake", "ironleaves")
+
+for (i in 1:length(not_replaced)){
+    proper <- replacements[i]
+    improper <- not_replaced[i]
+    attrs$Name <- str_replace_all(attrs$Name,
+                                  paste("^", improper, "$", sep = ""),
+                                  proper)
+}
+
+datatable(attrs[1:10, ], rownames = FALSE)
+
+```
+
+We now pivot the pokemon_new data frame into a longer format as well, storing each Base_Stat as a variable of Attribute to match the format of the attrs data frame. 
+
+```{r pokemon10, warning = FALSE, message = FALSE}
+pokemon_new %<>%
+    mutate_all(as.character) %>%
+    pivot_longer(cols = !starts_with("N"),
+                 names_to = "Attribute",
+                 values_to = "Value")
+
+datatable(pokemon_new[1:10, ], rownames = FALSE)
+
+```
+
+## Pokémon Data Analysis:
+
+Before we join the data frames, we can already observe the frequency of Pokémon by Type for all generations of games. 
+
+### All Generations by Type:
+
+```{r pokemon11, warning = FALSE, message = FALSE}
+
+attrs_analysis <- attrs
+attrs_analysis %<>%
+    filter(Attribute == "Type") %>%
+    group_by(Value) %>%
+    summarize(Count = n())
+
+types_colors <- c("#6390F0", "#A8A77A", "#7AC74C",
+    "#A98FF3", "#F95587", "#A6B91A", "#EE8130", "#A33EA1", "#E2BF65",
+    "#B6A136", "#C22E28", "#705746", "#F7D02C", "#6F35FC", "#B7B7CE",
+    "#D685AD", "#735797", "#96D9D6")
+
+names(types_colors) <- c("water", "normal", "grass", "flying",
+                         "psychic", "bug", "fire", "poison",
+                         "ground", "rock", "fighting", "dark",
+                         "electric", "dragon", "steel", "fairy",
+                         "ghost", "ice")
+
+ggplot(attrs_analysis, aes(x = reorder(Value, Count), y = Count,
+                                      fill = Value)) +
+    geom_bar(stat = "identity", show.legend = FALSE) +
+    coord_flip() + 
+    scale_fill_manual(values = types_colors) + 
+    ggtitle("Number of Pokemon by Type: All Generations") +
+    xlab("Type") +
+    ylab("Count")
+
+```
+
+There are more Water-type Pokémon than any other. This Type of Pokémon has been present since the first generation of games, unlike say Fairy-type Pokémon, which did not exist until the sixth generation of games. However, the Types of some of the Pokémon from the earlier generations have been updated to include the newer Types as the games have evolved. 
+
+### First Generation by Type:
+
+The first generation of games contained only 151 Pokémon, which we analyze separately after we do a full join on the data frames.
+
+```{r pokemon12, warning = FALSE, message = FALSE}
+
+pokemon_new_analysis <- pokemon_new
+pokemon_new_analysis$Number <- as.integer(str_replace_all(
+    pokemon_new_analysis$Number, "#", ""))
+pokemon_new_analysis %<>%
+    full_join(attrs) %>%
+    arrange(Name)
+pokemon_new_analysis$Number <- na.locf(pokemon_new_analysis$Number)
+pokemon_new_analysis %<>%
+    arrange(Number)
+
+datatable(pokemon_new_analysis[1:20, ], rownames = FALSE, 
+          options = list(pageLength = 10))
+
+pokemon_new_analysis_gen1 <- pokemon_new_analysis
+pokemon_new_analysis_gen1 %<>%
+    filter(Number < 152) %>%
+    filter(Attribute == "Type") %>%
+    group_by(Value) %>%
+    summarize(Count = n())
+
+ggplot(pokemon_new_analysis_gen1, aes(x = reorder(Value, Count), y = Count,
+                                      fill = Value)) +
+    geom_bar(stat = "identity", show.legend = FALSE) +
+    coord_flip() + 
+    scale_fill_manual(values = types_colors) + 
+    ggtitle("Number of Pokemon by Type: Generation 1") +
+    xlab("Type") +
+    ylab("Count")
+
+```
+
+There were technically only 15 Types in Generation 1, but recall that the Types of first generation Pokémon have since been updated. We see here that Poison is the most frequent Type of Generation 1 Pokémon, but Water, which is the most frequent Type across all generations, is still high on the list as the second most frequent Type.
+
+The interesting thing about there being so many Water Pokémon in Generation 1 is that it certainly doesn't feel that way when you're playing the games. Many Water Pokémon need to be caught with a fishing rod that you only get later in the game, and the range of Pokémon you can catch with that rod is very limited even mid-game. Hence, a strategy developed among many early Pokémon players to choose the Water Pokémon Squirtle as their starter Pokémon at the beginning of the game. They did this based on three considerations:
+
+1. because Squirtle would be the best Water Pokémon they could find for many hours of gameplay
+2. because choosing the Fire Pokémon Charmander as their starter instead would lead to difficult early gameplay, where they would need to defeat many Rock Pokémon that are resistant to Fire attacks
+3. because choosing the Grass starter Bulbasaur is less necessary, as they will find alternative, quality Grass Pokémon sooner than they will find alternative, quality Water Pokémon
+
+So there being lots of Water Pokémon in Generation 1 is on its own not enough data to make an informed decision about choosing a starter Pokémon. Like many game decisions, there's a little bit of art to it.
